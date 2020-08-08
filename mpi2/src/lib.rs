@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use memmap::{MmapMut, MmapOptions};
 use nix::unistd::{fork, ForkResult, Pid};
-use sysinfo::{ProcessExt, System, SystemExt, Signal, Process};
+use sysinfo::{Process, ProcessExt, Signal, System, SystemExt};
 
 type Rank = usize;
 const SENDER: u8 = 0;
@@ -27,14 +27,15 @@ fn wait_for_process<F: FnOnce(&Process)>(pid: Pid, timeout: Option<(Duration, F)
     if let Some(p) = sys.get_process(i32::from(pid)) {
         match timeout {
             Some((timeout, action)) => {
-                while p.status().to_string() != "Zombie" { // yup, this is shit code.
+                while p.status().to_string() != "Zombie" {
+                    // yup, this is shit code.
                     if (Instant::now() - t1) >= timeout {
                         action(&p);
                         break;
                     }
                 }
             }
-            None => while p.status().to_string() != "Zombie" {}
+            None => while p.status().to_string() != "Zombie" {},
         }
     }
 }
@@ -120,19 +121,18 @@ impl<'a, T> Sender<'a, T> {
     fn get_buffer_ref(&self) -> io::Result<&'a TransferBuffer> {
         unsafe { self.buffer.get().as_ref() }
             .map(|x| &**x)
-            .ok_or(Error::new(
-                ErrorKind::Other,
-                "Failed to get reference to buffer",
-            ))
+            .ok_or_else(|| Error::new(ErrorKind::Other, "Failed to get reference to buffer"))
     }
 
     fn get_buffer_mut(&mut self) -> io::Result<&'a mut TransferBuffer> {
         unsafe { self.buffer.get().as_mut() }
             .map(|x| &mut **x)
-            .ok_or(Error::new(
-                ErrorKind::Other,
-                "Failed to get mutable reference to buffer",
-            ))
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Other,
+                    "Failed to get mutable reference to buffer",
+                )
+            })
     }
 
     /// Put data into the channel
@@ -200,14 +200,14 @@ impl<T: Copy + Sized> Receiver<T> {
         Ok(body[0])
 
         The current workaround is ghetto as hell for performance reasons.
-        We'll just use a buffer that's large enough for most types; using a Vec would be
+        We'll just use a buffer that's large enough for "most" types; using a Vec would be
         another option but the incurred cost of the heap allocation brings down the performance
         by a factor of about 5 (on my machine).
         */
         const BUFFER_SIZE: usize = 1024 * 1024;
         assert!(size_of::<T>() <= BUFFER_SIZE);
         let mut buf: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
-        self.read(&mut buf)?;
+        self.read_exact(&mut buf)?;
         let (_head, body, _tail) = unsafe { buf.align_to::<T>() };
         Ok(body[0])
     }
@@ -273,7 +273,7 @@ mod tests {
 }
 
 pub fn bench_data_rate() {
-    const BUFFER_SIZE: usize = 32;
+    const BUFFER_SIZE: usize = 1024 * 256; // set back to 32 if you want to compare to servo
     const IMAX: usize = 100_000;
     const LENGTHS: usize = 3;
 
