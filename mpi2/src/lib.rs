@@ -207,7 +207,7 @@ impl<T: Copy + Sized> Receiver<T> {
         const BUFFER_SIZE: usize = 1024 * 1024;
         assert!(size_of::<T>() <= BUFFER_SIZE);
         let mut buf: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
-        self.read_exact(&mut buf)?;
+        self.read(&mut buf)?;
         let (_head, body, _tail) = unsafe { buf.align_to::<T>() };
         Ok(body[0])
     }
@@ -223,7 +223,7 @@ impl<T> Read for Receiver<T> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[derive(Debug, Copy, Clone, PartialEq, Default)]
@@ -239,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_transfer() {
+    pub fn simple_transfer() {
         let mut receiver1 = Receiver::<usize>::new().unwrap();
         let mut sender1 = receiver1.new_sender();
 
@@ -259,7 +259,7 @@ mod tests {
                 sender1.send(&456).unwrap();
                 sender2.send(&data2).unwrap();
                 assert_eq!(receiver3.recv().unwrap(), data3);
-                wait_for_process(child, Some(Duration::from_secs(10)));
+                wait_for_process::<fn(&Process)>(child, None);
             }
             Ok(ForkResult::Child) => {
                 assert_eq!(receiver1.recv().unwrap(), 123);
@@ -273,7 +273,7 @@ mod tests {
 }
 
 pub fn bench_data_rate() {
-    const BUFFER_SIZE: usize = 1024 * 256; // set back to 32 if you want to compare to servo
+    const BUFFER_SIZE: usize = 1024 * 1024; // set back to 32 if you want to compare to servo
     const IMAX: usize = 100_000;
     const LENGTHS: usize = 3;
 
