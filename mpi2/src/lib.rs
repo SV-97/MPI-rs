@@ -207,7 +207,7 @@ impl<T: Copy + Sized> Receiver<T> {
         const BUFFER_SIZE: usize = 1024 * 1024;
         assert!(size_of::<T>() <= BUFFER_SIZE);
         let mut buf: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
-        self.read_exact(&mut buf[..size_of::<T>()])?;
+        self.read(&mut buf)?;
         let (_head, body, _tail) = unsafe { buf.align_to::<T>() };
         Ok(body[0])
     }
