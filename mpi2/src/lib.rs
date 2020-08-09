@@ -14,13 +14,13 @@ type Rank = usize;
 const SENDER: u8 = 0;
 const RECEIVER: u8 = 1;
 
-fn kill_process(process: &Process) {
+pub fn kill_process(process: &Process) {
     if !process.kill(Signal::Abort) {
         process.kill(Signal::Kill);
     }
 }
 
-fn wait_for_process<F: FnOnce(&Process)>(pid: Pid, timeout: Option<(Duration, F)>) {
+pub fn wait_for_process<F: FnOnce(&Process)>(pid: Pid, timeout: Option<(Duration, F)>) {
     let mut sys = System::new();
     sys.refresh_all();
     let t1 = Instant::now();
@@ -135,15 +135,16 @@ impl<'a, T> Sender<'a, T> {
             })
     }
 
+    fn write_unaligned(&mut self, src: T) {
+        let ptr = self.get_buffer_mut().unwrap().buffer_mut().as_mut_ptr() as *mut T;
+        unsafe { ptr.write_unaligned(src) }
+    }
+
     /// Put data into the channel
-    pub fn send(&mut self, data: &T) -> Result<(), ()> {
-        let payload_size = size_of::<T>();
-        let send_data =
-            unsafe { std::slice::from_raw_parts(data as *const T as *const u8, payload_size) };
-        match self.write(send_data) {
-            Ok(bytes) if bytes == payload_size => Ok(()),
-            _ => Err(()),
-        }
+    pub fn send(&mut self, data: T) {
+        self.get_buffer_ref().unwrap().wait_for_owner(SENDER);
+        self.write_unaligned(data);
+        self.get_buffer_mut().unwrap().write_owner(RECEIVER);
     }
 }
 
@@ -185,31 +186,19 @@ impl<T: Copy> Receiver<T> {
             phantom_data: PhantomData,
         }
     }
+
+    fn read_unaligned(&self) -> T {
+        let ptr = self.buffer.buffer().as_ptr() as *const T;
+        unsafe { ptr.read_unaligned() }
+    }
 }
 
 impl<T: Copy + Sized> Receiver<T> {
-    pub fn recv(&mut self) -> io::Result<T> {
-        /* The buffer should really be a stack allocated array for best performance.
-        Sadly this is currently not possible since the constant can't depend on the
-        type parameter. This is likely going to be fixed in a future version of Rust.
-        See also: https://github.com/rust-lang/rust/pull/68388
-        Correct code should be:
-        let mut buf: [u8; size_of::<T>()] = [0; size_of::<T>()];
-        self.read(&mut buf)?;
-        let (_head, body, _tail) = unsafe { buf.align_to::<T>() };
-        Ok(body[0])
-
-        The current workaround is ghetto as hell for performance reasons.
-        We'll just use a buffer that's large enough for "most" types; using a Vec would be
-        another option but the incurred cost of the heap allocation brings down the performance
-        by a factor of about 5 (on my machine).
-        */
-        const BUFFER_SIZE: usize = 1024 * 1024;
-        assert!(size_of::<T>() <= BUFFER_SIZE);
-        let mut buf: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
-        self.read(&mut buf)?;
-        let (_head, body, _tail) = unsafe { buf.align_to::<T>() };
-        Ok(body[0])
+    pub fn recv(&mut self) -> T {
+        self.buffer.wait_for_owner(RECEIVER);
+        let t = self.read_unaligned();
+        self.buffer.write_owner(SENDER);
+        t
     }
 }
 
@@ -255,17 +244,17 @@ pub mod tests {
 
         match fork() {
             Ok(ForkResult::Parent { child, .. }) => {
-                sender1.send(&123).unwrap();
-                sender1.send(&456).unwrap();
-                sender2.send(&data2).unwrap();
-                assert_eq!(receiver3.recv().unwrap(), data3);
+                sender1.send(123);
+                sender1.send(456);
+                sender2.send(data2);
+                assert_eq!(receiver3.recv(), data3);
                 wait_for_process::<fn(&Process)>(child, None);
             }
             Ok(ForkResult::Child) => {
-                assert_eq!(receiver1.recv().unwrap(), 123);
-                assert_eq!(receiver1.recv().unwrap(), 456);
-                assert_eq!(receiver2.recv().unwrap(), data2);
-                sender3.send(&data3).unwrap();
+                assert_eq!(receiver1.recv(), 123);
+                assert_eq!(receiver1.recv(), 456);
+                assert_eq!(receiver2.recv(), data2);
+                sender3.send(data3);
             }
             Err(e) => panic!("fork failed: {}", e),
         }
@@ -288,7 +277,7 @@ pub fn bench_data_rate() {
             for _ in 0..LENGTHS {
                 let t1 = Instant::now();
                 for _ in 0..IMAX {
-                    let _dat = receiver.recv().unwrap();
+                    let _dat = receiver.recv();
                 }
                 let t2 = Instant::now() - t1;
                 times.push((BUFFER_SIZE, t2));
@@ -316,7 +305,7 @@ pub fn bench_data_rate() {
             for _ in 0..LENGTHS {
                 let t1 = Instant::now();
                 for _ in 0..IMAX {
-                    sender.send(&buf).unwrap();
+                    sender.send(buf);
                 }
                 let t2 = Instant::now() - t1;
                 times.push((BUFFER_SIZE, t2));
